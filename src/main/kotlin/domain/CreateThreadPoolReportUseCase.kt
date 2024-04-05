@@ -1,10 +1,9 @@
 package domain
 
 import domain.model.report.ThreadPoolReport
-import domain.model.slice.RunningSlice
 import domain.model.slice.Slice
-import domain.model.slice.WaitingSlice
 import domain.model.thread.Thread
+import domain.model.thread.ThreadState
 import util.microToMillis
 import util.nanoToMicros
 
@@ -16,16 +15,18 @@ object CreateThreadPoolReportUseCase {
         val awaitTimes = mutableListOf<Long>()
         val durationSlices = mutableListOf<Long>()
         val betweenTimes = mutableListOf<Long>()
+        val stateDurationsByThread = mutableMapOf<String, Map<String, Long>>()
+        val stateDurationsBySlice = mutableMapOf<String, Map<Slice, Map<String, Long>>>()
         threads.forEach { thread ->
             if (thread.slices.isEmpty()) {
                 return@forEach
             }
-            runningSliceCount += thread.slices.count { slice -> slice is RunningSlice }
+            runningSliceCount += thread.slices.count { slice -> !slice.isWaiting }
             val firstSlice = thread.slices.first()
             thread.slices.forEach { slice ->
-                when (slice) {
-                    is RunningSlice -> {
-                        val waitingSlices = mutableListOf<WaitingSlice>()
+                when (slice.isWaiting) {
+                    false -> {
+                        val waitingSlices = mutableListOf<Slice>()
                         threads.forEach { thread ->
                             val waitingSlice = findNearestWaitingSlice(thread.slices, slice)
                             waitingSlice?.let {
@@ -45,38 +46,103 @@ object CreateThreadPoolReportUseCase {
                             }
                         }
                         awaitTimes.add(awaitTime)
-                        durationSlices.add(slice.dur)
+                        durationSlices.add(slice.duration)
                         totalAwaitTimeMilliSec += awaitTime
                     }
 
-                    is WaitingSlice -> {
-                        betweenTimes.add(slice.dur)
+                    true -> {
+                        betweenTimes.add(slice.duration)
                     }
                 }
             }
+            val stateDurationsForThread = calculateStatesDuration(thread.states)
+            val stateDurationsForSlice = calculateStatesDurationForRunningSlice(thread)
+            stateDurationsByThread[thread.name] = stateDurationsForThread
+            stateDurationsBySlice[thread.name] = stateDurationsForSlice
         }
+
 
         return ThreadPoolReport(
             threadCount = threads.size,
-            averageAwaitTime = (totalAwaitTimeMilliSec / runningSliceCount).nanoToMicros().microToMillis(),
+            averageAwaitTime = (totalAwaitTimeMilliSec / runningSliceCount),
             totalAwaitTimeMilliSec = totalAwaitTimeMilliSec,
             runningSliceCount = runningSliceCount,
             awaitTimes = awaitTimes,
             runningSliceDurations = durationSlices,
-            runningSliceBetweenTimes = betweenTimes
+            runningSliceBetweenTimes = betweenTimes,
+            stateDurationsBySlice = stateDurationsBySlice,
+            stateDurationsByThread = stateDurationsByThread
         )
 
     }
 
     private fun findNearestWaitingSlice(
         slices: List<Slice>,
-        runningSlice: RunningSlice
-    ): WaitingSlice? {
+        runningSlice: Slice
+    ): Slice? {
         return slices.lastOrNull { slice ->
-            slice is WaitingSlice
+            slice.isWaiting
                     && slice.end <= runningSlice.start
-                    && slice.dur > Constants.MAX_GET_TASK_DURATION_MICRO_SEC
-        } as WaitingSlice?
+                    && slice.duration > Constants.MAX_GET_TASK_DURATION_MICRO_SEC
+        }
+    }
+
+    private fun calculateStatesDuration(threadStates: List<ThreadState>): Map<String, Long> {
+        val stateDurations = mutableMapOf<String, Long>()
+        threadStates.forEach { threadState ->
+            val key = threadState.state
+            if (stateDurations.contains(key)) {
+                var duration = stateDurations[key] ?: 0
+                duration += threadState.duration
+                stateDurations[key] = duration
+            } else {
+                stateDurations[key] = threadState.duration
+            }
+        }
+        return stateDurations
+    }
+
+    private fun calculateStatesDurationForRunningSlice(thread: Thread): Map<Slice, Map<String, Long>> {
+        val stateDurationsBySlice = mutableMapOf<Slice, Map<String, Long>>()
+        thread.slices
+            .filter { slice -> !slice.isWaiting }
+            .forEach { slice ->
+                val stateDurations = mutableMapOf<String, Long>()
+                val threadStates = getThreadStatesForSlice(slice, thread.states)
+                threadStates.forEach { threadState ->
+                    var threadStateDuration = 0L
+                    if (threadState.start <= slice.start && threadState.end < slice.end && threadState.end > slice.start) {
+                        threadStateDuration = threadState.end - slice.start
+                    }
+                    if (threadState.start > slice.start && threadState.end < slice.end) {
+                        threadStateDuration = threadState.duration
+                    }
+                    if (threadState.start > slice.start && threadState.end >= slice.end && threadState.start < slice.end) {
+                        threadStateDuration = slice.end - threadState.start
+                    }
+                    if (threadState.start < slice.start && threadState.end > slice.end) {
+                        threadStateDuration = slice.duration
+                    }
+                    if (threadState.start == slice.start && threadState.end == slice.end) {
+                        threadStateDuration = threadState.duration
+                    }
+
+                    val key = threadState.state
+                    if (stateDurations.contains(key)) {
+                        var duration = stateDurations[key] ?: 0
+                        duration += threadStateDuration
+                        stateDurations[key] = duration
+                    } else {
+                        stateDurations[key] = threadStateDuration
+                    }
+                }
+                stateDurationsBySlice[slice] = stateDurations
+            }
+        return stateDurationsBySlice
+    }
+
+    private fun getThreadStatesForSlice(slice: Slice, threadStates: List<ThreadState>): List<ThreadState> {
+        return threadStates
     }
 
 }

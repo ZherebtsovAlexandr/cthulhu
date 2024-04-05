@@ -1,11 +1,9 @@
 package domain
 
-import domain.model.slice.RunningSlice
 import domain.model.slice.Slice
-import domain.model.slice.WaitingSlice
 
 object FillWaitingSlicesUseCase {
-    fun fill(runningSlices: List<RunningSlice>): List<Slice> {
+    fun fill(runningSlices: List<Slice>): List<Slice> {
         val slices = mutableListOf<Slice>()
         var previousRunningSlice: Slice? = null
         runningSlices
@@ -21,10 +19,11 @@ object FillWaitingSlicesUseCase {
         return slices
     }
 
-    private fun isCorrectSlice(start: Long, end: Long) = start <=end
+    private fun isCorrectSlice(start: Long, end: Long) = start <= end
 
-    private fun createWaitingSlice(previous: Slice, current: Slice) = WaitingSlice(
+    private fun createWaitingSlice(previous: Slice, current: Slice) = Slice(
         start = previous.end,
-        end = current.start
+        end = current.start,
+        isWaiting = true
     )
 }
