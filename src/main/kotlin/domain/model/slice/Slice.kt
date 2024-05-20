@@ -12,6 +12,6 @@ data class Slice(
 ) {
     val duration by lazy { end - start }
     override fun toString(): String {
-        return "WaitingSlice(start=$start, end=$end, isWaiting=$isWaiting, dur=${duration.nanoToMicros()})"
+        return "Slice(start=$start, end=$end, isWaiting=$isWaiting, dur=${duration.nanoToMicros()})"
     }
 }

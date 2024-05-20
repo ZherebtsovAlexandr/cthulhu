@@ -29,6 +29,10 @@ object ThreadPoolReportPrinter {
         printDurationByThread(report.stateDurationsByThread)
 
         printDurationBySlice(report.stateDurationsBySlice)
+
+        printAwaitTimesByThread(report.awaitTimesByThreads)
+
+        printFreeThreadPercent(report.awaitTimesByThreads)
     }
 
     private fun printDurationByThread(durations: Map<String, Map<String, Long>>) {
@@ -50,8 +54,7 @@ object ThreadPoolReportPrinter {
         println("Thread states by slice:")
 
         durations.forEach { threadEntry ->
-            println("Thread - ${threadEntry.key}")
-
+            println("Thread - ${threadEntry.key} ( slices count ${threadEntry.value.size})")
             val slicesRunningStatePercents = mutableListOf<Long>()
             threadEntry.value.forEach { sliceEntry ->
                 var totalDurationBySlice = 0L
@@ -88,6 +91,47 @@ object ThreadPoolReportPrinter {
 
     private fun printAverageAwaitTime(averageAwaitTime: Long) {
         println("Average await time: ${averageAwaitTime.nanoToMicros().microToMillis()} ms")
+    }
+
+    private fun printAwaitTimesByThread(awaitTimes: Map<String, List<Long>>) {
+        println("Await times by thread")
+        awaitTimes.forEach { entry ->
+            println("Thread ${entry.key}")
+            printPercentilesForAwaitTimes(entry.value)
+        }
+        awaitTimes.forEach { entry ->
+            println("Thread ${entry.key} - ${entry.value.size}")
+        }
+
+    }
+
+    private fun printFreeThreadPercent(awaitTimesByThreads: Map<String, List<Long>>) {
+        var counter = 0
+        val percentile75List = mutableListOf<Long>()
+        awaitTimesByThreads.forEach { entry ->
+            val list = entry.value.sorted()
+            val medianIndex = (list.size * 0.5).toInt()
+            val percentile75Index = (list.size * 0.75).toInt()
+            val percentile90Index = (list.size * 0.90).toInt()
+            val percentile99Index = (list.size * 0.99).toInt()
+            val percenttile75 = list[percentile75Index].nanoToMicros().microToMillis()
+            if (percenttile75 <= 2) {
+                counter++
+            } else {
+                percentile75List.add(percenttile75)
+            }
+        }
+        val percent = (counter * 100).toDouble() / awaitTimesByThreads.size
+        println(
+            "Free $counter from ${awaitTimesByThreads.size} (${
+                String.format(
+                    "%.2f",
+                    percent
+                )
+            } %), average value:  ${percentile75List.average().toLong()}"
+        )
+
+
     }
 
     private fun printPercentilesForRunningSliceDurations(durations: List<Long>) {

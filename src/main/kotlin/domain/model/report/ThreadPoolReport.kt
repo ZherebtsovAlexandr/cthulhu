@@ -9,6 +9,7 @@ data class ThreadPoolReport(
     val totalAwaitTimeMilliSec: Long = 0L,
     var runningSliceCount: Int = 0,
     val awaitTimes: List<Long> = mutableListOf(),
+    val awaitTimesByThreads: MutableMap<String, MutableList<Long>> = mutableMapOf(),
     val runningSliceDurations: List<Long> = mutableListOf(),
     val runningSliceBetweenTimes: List<Long> = mutableListOf(),
     val stateDurationsByThread: Map<String, Map<String, Long>> = mutableMapOf(),
