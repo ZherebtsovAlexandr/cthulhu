@@ -5,7 +5,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class Thread(
+    val id: Int,
     val name: String,
-    val slices: List<Slice>,
-    val states: List<ThreadState>
+    val slices: List<Slice> = listOf(),
+    val states: List<ThreadState> = listOf()
 )
