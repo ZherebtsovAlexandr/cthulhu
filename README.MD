@@ -92,3 +92,157 @@ State описывает состояние потока в конкретный
 - Аналогично вычисляется длительность состояний для активных задач (`calculateStatesDurationForRunningSlice`) и также ассоциируется с именем потока.
 
 Этот алгоритм позволяет отслеживать время, которое каждая задача проводит в ожидании перед выполнением, что может быть полезно для анализа производительности пула потоков и оптимизации распределения ресурсов.
+
+
+### Импорт Json из .perfetto-trace файла
+
+`com.example.app` - название процесса
+
+`PrefixForSlice` - если задачи имеют определенный префикс, то можно его указать здесь, чтобы отфильтровать лишние `Slice`.
+
+`poolName` - необходимо, чтобы потоки в приложении из одного пула имели одинаковый префикс, например io-pool-thread.
+
+```kotlin
+   import androidx.benchmark.perfetto.*;
+
+   @OptIn(ExperimentalPerfettoTraceProcessorApi::class, ExperimentalPerfettoCaptureApi::class)
+    private fun saveAsJson(filesDir: String, traceFile: String, poolName: String, jsonFileName: String) {
+        PerfettoTraceProcessor.runServer {
+            loadTrace(PerfettoTrace("$filesDir/${traceFile}")) {
+
+                val threadStateRows = query(
+                    "SELECT " +
+                        "    thread.tid as thread_tid, " +
+                        "    thread_state.id as id, " +
+                        "    thread.id as thread_id, " +
+                        "    thread.name as thread_name, " +
+                        "    thread_state.state as state, " +
+                        "    thread_state.ts as start, " +
+                        "    thread_state.dur as duration " +
+                        "FROM thread_state " +
+                        "    INNER JOIN thread on thread_state.utid = thread.id" +
+                        "    INNER JOIN process USING(upid)" +
+                        "WHERE" +
+                        "    thread_name LIKE \"$poolName%\"" +
+                        "    AND process.name LIKE \"com.example.app%\"" +
+                        "ORDER BY start  "
+                )
+
+                val sliceRows = query(
+                    "SELECT "
+                        + "thread.tid as thread_id, "
+                        + "thread.name as thread_name, "
+                        + "slice.name as slice_name, "
+                        + "slice.ts, "
+                        + "slice.dur "
+                        + "FROM slice "
+                        + "INNER JOIN thread_track on slice.track_id = thread_track.id "
+                        + "INNER JOIN thread USING(utid) "
+                        + "INNER JOIN process USING(upid) "
+                        + "WHERE "
+                        + "thread.name LIKE  \"$poolName%\" AND "
+                        + "slice.name LIKE \"PrefixForTask%\" AND "
+                        + "process.name LIKE \"com.example.app%\"".trimMargin()
+                )
+
+
+                val threadStatesRowsGroupedByThread = threadStateRows
+                    .groupBy { row ->
+                        row.string("thread_name") + row.long("thread_tid")
+                    }
+
+                val threadStatesGroupedByThread = mutableMapOf<String, List<ThreadState>>()
+
+                threadStatesRowsGroupedByThread.forEach { entry ->
+                    val threadName = entry.key
+                    val threadStates = entry.value.map { row ->
+                        val start = row.long("start")
+                        val dur = row.long("duration")
+                        val state = row.string("state")
+                        val threadState = ThreadState(
+                            start = start,
+                            end = start + dur,
+                            state = state
+                        )
+                        threadState
+                    }
+                    threadStatesGroupedByThread[threadName] = threadStates
+                }
+
+
+                val slicesRowsGroupedByThread = sliceRows.groupBy { row ->
+                    row.string("thread_name") + row.long("thread_id")
+                }
+
+                val threads = slicesRowsGroupedByThread.map { entry ->
+                    val threadName = entry.key
+                    val slices = entry.value.map { row ->
+                        val start = row.long("ts")
+                        val dur = row.long("dur")
+                        val name = row.string("slice_name")
+                        val runningSlice = Slice(
+                            start = start,
+                            end = start + dur,
+                            name = name,
+                            isWaiting = false
+                        )
+                        runningSlice
+                    }
+                    PerfettoThread(
+                        id = 0, //just hardcode, not important stuff but this issue
+                        name = threadName,
+                        slices = slices,
+                        states = threadStatesGroupedByThread[threadName] ?: listOf()
+                    )
+                }
+
+
+                val json = Json.encodeToString(threads)
+                val dir = File(filesDir, "traces")
+                if (!dir.exists()) {
+                    dir.mkdir()
+                }
+                try {
+                    val jsonFile = File(dir, "$poolName-${jsonFileName}.json")
+                    val writer = FileWriter(jsonFile)
+                    writer.append(json)
+                    writer.flush()
+                    writer.close()
+                    println("Saved json file here $filesDir/traces/$poolName-${jsonFileName}.json")
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+```
+
+Вспомогательные классы модели
+
+```kotlin
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class Thread(
+    val id: Int,
+    val name: String,
+    val slices: List<Slice> = listOf(),
+    val states: List<ThreadState> = listOf()
+)
+
+@Serializable
+data class Slice(
+  val name: String = "",
+  val isWaiting: Boolean = false,
+  val start: Long = 0L,
+  val end: Long = 0L,
+)
+
+@Serializable
+data class ThreadState(
+  val state: String,
+  val start: Long,
+  val end: Long
+)
+```
+
